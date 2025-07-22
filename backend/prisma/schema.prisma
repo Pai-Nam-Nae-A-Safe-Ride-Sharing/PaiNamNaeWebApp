@@ -1,0 +1,135 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --- Enums (ชนิดข้อมูลที่กำหนดค่าได้) ---
+enum Role {
+  PASSENGER
+  DRIVER
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RouteStatus {
+  AVAILABLE
+  FULL
+  COMPLETED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+
+// --- Models (จะถูกแปลงเป็น Tables ใน PostgreSQL) ---
+
+model User {
+  id                    String   @id @default(cuid())
+  username              String   @unique
+  email                 String   @unique
+  password              String
+  firstName             String?
+  lastName              String?
+  gender                String?
+  phoneNumber           String?
+  profilePicture        String?
+  nationalIdNumber      String?
+  nationalIdPhotoUrl    String?  @unique
+  nationalIdExpiryDate  DateTime?
+  selfiePhotoUrl        String?
+  role                  Role     @default(PASSENGER)
+  isVerified            Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  otpCode               String?
+  lastLogin             DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // --- ความสัมพันธ์ (Relations) ---
+  driverVerification    DriverVerification?
+  vehicles              Vehicle[]
+  createdRoutes         Route[]             @relation("DriverRoutes")
+  bookings              Booking[]           @relation("PassengerBookings")
+}
+
+model DriverVerification {
+  id                  String             @id @default(cuid())
+  userId              String             @unique
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  licenseNumber       String             @unique
+  firstNameOnLicense  String
+  lastNameOnLicense   String
+  licenseIssueDate    DateTime
+  licenseExpiryDate   DateTime
+  licensePhotoUrl     String
+  status              VerificationStatus @default(PENDING)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+model Vehicle {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicleModel  String
+  licensePlate  String   @unique
+  vehicleType   String
+  color         String
+  seatCapacity  Int
+  amenities     String[]
+  photos        Json?    @db.Json
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  routes        Route[]
+}
+
+model Route {
+  id              String      @id @default(cuid())
+  driverId        String
+  driver          User        @relation("DriverRoutes", fields: [driverId], references: [id], onDelete: Cascade)
+  vehicleId       String
+  vehicle         Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  startLocation   Json        @db.Json
+  endLocation     Json        @db.Json
+  departureTime   DateTime
+  availableSeats  Int
+  pricePerSeat    Float
+  conditions      String?
+  status          RouteStatus @default(AVAILABLE)
+  routeSummary    String?
+  distance        String?
+  duration        String?
+  waypoints       Json        @db.Json
+  landmarks       Json        @db.Json
+  steps           Json        @db.Json
+  createdAt       DateTime    @default(now())
+
+  bookings        Booking[]
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  routeId         String
+  route           Route         @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  passengerId     String
+  passenger       User          @relation("PassengerBookings", fields: [passengerId], references: [id], onDelete: Cascade)
+  numberOfSeats   Int
+  status          BookingStatus @default(PENDING)
+  pickupLocation  Json          @db.Json
+  dropoffLocation Json          @db.Json
+  createdAt       DateTime      @default(now())
+}
