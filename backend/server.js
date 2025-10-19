@@ -19,8 +19,9 @@ promClient.collectDefaultMetrics();
 app.use(helmet());
 
 const corsOptions = {
-    origin: ['http://localhost:3001',
-        'https://painamnaewebapp.netlify.app'],
+    // origin: ['http://localhost:3001',
+    //     'https://painamnaewebapp.netlify.app'],
+    origin: 'http://localhost:3001',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
