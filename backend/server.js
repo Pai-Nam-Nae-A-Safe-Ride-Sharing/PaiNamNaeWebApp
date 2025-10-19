@@ -21,7 +21,7 @@ app.use(helmet());
 const corsOptions = {
     // origin: ['http://localhost:3001',
     //     'https://painamnaewebapp.netlify.app'],
-    origin: 'http://localhost:3001',
+    origin: 'https://painamnaewebapp.netlify.app',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
