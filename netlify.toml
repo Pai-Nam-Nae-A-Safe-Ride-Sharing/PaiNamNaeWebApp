@@ -1,7 +1,7 @@
 [build]
   base = "frontend"
   publish = ".output/public"
-  command = "npm run build"
+  command = "npx nuxi prepare && npx nuxi build"
 
 [build.environment]
   NODE_VERSION = "20"
