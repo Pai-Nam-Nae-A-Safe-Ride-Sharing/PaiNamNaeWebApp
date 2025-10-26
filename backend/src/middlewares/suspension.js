@@ -3,7 +3,7 @@ const prisma = require('../utils/prisma');
 async function requirePassengerNotSuspended(req, res, next) {
   try {
     const userId = req.user?.sub;
-    if (!userId) return next(); // เผื่อบางเส้นทางยังไม่ได้ protect
+    if (!userId) return next();
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -11,9 +11,33 @@ async function requirePassengerNotSuspended(req, res, next) {
     });
 
     if (user?.passengerSuspendedUntil && user.passengerSuspendedUntil > new Date()) {
-      return res.status(403).json({
+      return res.status(423).json({
         success: false,
-        message: 'คุณถูกระงับสิทธิ์การจองชั่วคราว โปรดลองใหม่ภายหลัง',
+        code: 'PASSENGER_SUSPENDED',
+        message: 'บัญชีของคุณถูกระงับการจองชั่วคราว ไม่สามารถสร้างการจองใหม่ได้ในช่วงนี้',
+      });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function requireDriverNotSuspended(req, res, next) {
+  try {
+    const userId = req.user?.sub;
+    if (!userId) return next();
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { driverSuspendedUntil: true },
+    });
+
+    if (user?.driverSuspendedUntil && user.driverSuspendedUntil > new Date()) {
+      return res.status(423).json({
+        success: false,
+        code: 'DRIVER_SUSPENDED',
+        message: 'บัญชีผู้ขับขี่ของคุณถูกระงับชั่วคราว ไม่สามารถสร้าง/แก้ไขเส้นทางได้ในช่วงนี้',
       });
     }
     next();
@@ -24,4 +48,5 @@ async function requirePassengerNotSuspended(req, res, next) {
 
 module.exports = {
   requirePassengerNotSuspended,
+  requireDriverNotSuspended,
 };

@@ -1,7 +1,8 @@
 const express = require("express");
 const validate = require("../middlewares/validate");
 const { protect, requireAdmin } = require("../middlewares/auth");
-const requireDriverVerified = require('../middlewares/driverVerified');
+const requireDriverVerified = require("../middlewares/driverVerified");
+const { requireDriverNotSuspended } = require("../middlewares/suspension");
 const routeController = require("../controllers/route.controller");
 const {
   idParamSchema,
@@ -11,7 +12,7 @@ const {
   updateRouteByAdminSchema,
   adminDriverIdParamSchema,
   listRoutesQuerySchema,
-  cancelRouteSchema
+  cancelRouteSchema,
 } = require("../validations/route.validation");
 
 const router = express.Router();
@@ -33,8 +34,7 @@ router.get(
   requireAdmin,
   validate({ params: adminDriverIdParamSchema }),
   routeController.adminGetRoutesByDriver
-)
-
+);
 
 // GET /routes/admin/:id
 router.get(
@@ -81,11 +81,7 @@ router.get(
 );
 
 // GET /routes/me
-router.get(
-  "/me",
-  protect,
-  routeController.getMyRoutes
-);
+router.get("/me", protect, routeController.getMyRoutes);
 
 // GET /routes/:id
 router.get(
@@ -99,6 +95,7 @@ router.post(
   "/",
   protect,
   requireDriverVerified,
+  requireDriverNotSuspended,
   validate({ body: createRouteSchema }),
   routeController.createRoute
 );
@@ -108,6 +105,7 @@ router.put(
   "/:id",
   protect,
   requireDriverVerified,
+  requireDriverNotSuspended,
   validate({ params: idParamSchema, body: updateRouteSchema }),
   routeController.updateRoute
 );
@@ -121,11 +119,22 @@ router.patch(
   routeController.cancelRoute
 );
 
+// PATCH /routes/:id/complete
+router.patch(
+  "/:id/complete",
+  protect,
+  requireDriverVerified,
+  requireDriverNotSuspended,
+  validate({ params: idParamSchema }),
+  routeController.completeRoute
+);
+
 // DELETE /routes/:id
 router.delete(
   "/:id",
   protect,
   requireDriverVerified,
+  requireDriverNotSuspended,
   validate({ params: idParamSchema }),
   routeController.deleteRoute
 );

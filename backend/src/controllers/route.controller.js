@@ -4,6 +4,7 @@ const vehicleService = require("../services/vehicle.service");
 const ApiError = require("../utils/ApiError");
 const verifService = require("../services/driverVerification.service");
 const { getDirections } = require("../utils/googleMaps");
+const prisma = require("../utils/prisma");
 
 const getAllRoutes = asyncHandler(async (req, res) => {
   const routes = await routeService.getAllRoutes();
@@ -251,6 +252,17 @@ const updateRoute = asyncHandler(async (req, res) => {
   });
 });
 
+const completeRoute = asyncHandler(async (req, res) => {
+  const driverId = req.user.sub;
+  const { id } = req.params;
+  const result = await routeService.completeRoute(id, driverId);
+  res.status(200).json({
+    success: true,
+    message: "Route completed successfully",
+    data: result
+  });
+});
+
 const deleteRoute = asyncHandler(async (req, res) => {
   const driverId = req.user.sub;
   const { id } = req.params;
@@ -469,10 +481,17 @@ const cancelRoute = asyncHandler(async (req, res) => {
   const { reason } = req.body;
 
   const result = await routeService.cancelRoute(id, driverId, { reason });
+
+  const me = await prisma.user.findUnique({
+    where: { id: driverId },
+    select: { driverSuspendedUntil: true },
+  });
+
   res.status(200).json({
     success: true,
     message: "Route cancelled successfully",
-    data: result
+    data: result,
+    meta: { driverSuspendedUntil: me?.driverSuspendedUntil || null },
   });
 });
 
@@ -490,4 +509,5 @@ module.exports = {
   adminDeleteRoute,
   adminGetRoutesByDriver,
   cancelRoute,
+  completeRoute,
 };

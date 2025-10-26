@@ -40,7 +40,9 @@
                                             <h4 class="text-lg font-semibold text-gray-900">
                                                 {{ trip.origin }} → {{ trip.destination }}
                                             </h4>
-                                            <span v-if="trip.status === 'pending'"
+                                            <span v-if="trip.routeStatus === 'completed' && trip.status === 'confirmed'"
+                                                class="status-badge status-completed">จบแล้ว</span>
+                                            <span v-else-if="trip.status === 'pending'"
                                                 class="status-badge status-pending">รอดำเนินการ</span>
                                             <span v-else-if="trip.status === 'confirmed'"
                                                 class="status-badge status-confirmed">ยืนยันแล้ว</span>
@@ -106,9 +108,9 @@
                                                 <li class="mt-1">
                                                     • จุดปลายทาง:
                                                     <span class="font-medium text-gray-900">{{ trip.destination
-                                                    }}</span>
+                                                        }}</span>
                                                     <span v-if="trip.destinationAddress"> — {{ trip.destinationAddress
-                                                    }}</span>
+                                                        }}</span>
                                                 </li>
                                             </ul>
                                         </div>
@@ -142,13 +144,20 @@
                                 </div>
 
                                 <div class="flex justify-end space-x-3" :class="{ 'mt-4': selectedTripId !== trip.id }">
-                                    <!-- PENDING: ยกเลิกได้ -->
-                                    <button v-if="trip.status === 'pending'" @click.stop="openCancelModal(trip)"
+                                    <template v-if="trip.routeStatus === 'completed'">
+                                        <button @click.stop="openConfirmModal(trip, 'delete')"
+                                            class="px-4 py-2 text-sm text-gray-600 transition duration-200 border border-gray-300 rounded-md hover:bg-gray-50">
+                                            ลบรายการ
+                                        </button>
+                                    </template>
+
+                                    <!-- PENDING -->
+                                    <button v-else-if="trip.status === 'pending'" @click.stop="openCancelModal(trip)"
                                         class="px-4 py-2 text-sm text-red-600 transition duration-200 border border-red-300 rounded-md hover:bg-red-50">
                                         ยกเลิกการจอง
                                     </button>
 
-                                    <!-- CONFIRMED: เพิ่มปุ่มยกเลิก + คงปุ่มแชท -->
+                                    <!-- CONFIRMED -->
                                     <template v-else-if="trip.status === 'confirmed'">
                                         <button @click.stop="openCancelModal(trip)"
                                             class="px-4 py-2 text-sm text-red-600 transition duration-200 border border-red-300 rounded-md hover:bg-red-50">
@@ -160,7 +169,7 @@
                                         </button>
                                     </template>
 
-                                    <!-- REJECTED / CANCELLED: ลบได้ -->
+                                    <!-- REJECTED / CANCELLED -->
                                     <button v-else-if="['rejected', 'cancelled'].includes(trip.status)"
                                         @click.stop="openConfirmModal(trip, 'delete')"
                                         class="px-4 py-2 text-sm text-gray-600 transition duration-200 border border-gray-300 rounded-md hover:bg-gray-50">
@@ -263,6 +272,7 @@ const tabs = [
     { status: 'confirmed', label: 'ยืนยันแล้ว' },
     { status: 'rejected', label: 'ปฏิเสธ' },
     { status: 'cancelled', label: 'ยกเลิก' },
+    { status: 'completed', label: 'จบแล้ว' },
     { status: 'all', label: 'ทั้งหมด' }
 ]
 
@@ -289,7 +299,12 @@ const tripToCancel = ref(null)
 // --- Computed Properties ---
 const filteredTrips = computed(() => {
     if (activeTab.value === 'all') return allTrips.value
-    return allTrips.value.filter((trip) => trip.status === activeTab.value)
+    if (activeTab.value === 'completed') {
+        return allTrips.value.filter(t =>
+            t.routeStatus === 'completed' && t.status === 'confirmed'
+        )
+    }
+    return allTrips.value.filter(t => t.status === activeTab.value)
 })
 
 const selectedTrip = computed(() => {
@@ -382,6 +397,8 @@ async function fetchMyTrips() {
                 polyline: b.route.routePolyline || null, // ใช้เมื่อมี
                 stops,
                 stopsCoords,
+                routeStatus: String(b.route?.status || '').toLowerCase(),
+                isCompleted: String(b.route?.status || '').toLowerCase() === 'completed',
                 carDetails,
                 conditions: b.route.conditions,
                 photos: b.route.vehicle?.photos || [],
@@ -488,7 +505,12 @@ function getPlaceName(placeId) {
 
 const getTripCount = (status) => {
     if (status === 'all') return allTrips.value.length
-    return allTrips.value.filter((trip) => trip.status === status).length
+    if (status === 'completed') {
+        return allTrips.value.filter(t =>
+            t.routeStatus === 'completed' && t.status === 'confirmed'
+        ).length
+    }
+    return allTrips.value.filter(t => t.status === status).length
 }
 
 const toggleTripDetails = (tripId) => {
@@ -575,6 +597,14 @@ async function updateMap(trip) {
         gmap.fitBounds(bounds)
     }
 }
+
+watch(activeTab, async () => {
+    selectedTripId.value = null
+    await nextTick()
+    if (filteredTrips.value.length) {
+        updateMap(filteredTrips.value[0])
+    }
+})
 
 // --- Modal Logic ---
 const isModalVisible = ref(false)
@@ -781,6 +811,13 @@ function initializeMap() {
 
 .tab-button {
     transition: all 0.3s ease;
+}
+
+.status-completed {
+    background-color: #e5e7eb;
+    /* gray-200 */
+    color: #374151;
+    /* gray-700 */
 }
 
 .tab-button.active {

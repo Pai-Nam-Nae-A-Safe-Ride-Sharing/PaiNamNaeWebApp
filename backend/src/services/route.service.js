@@ -2,7 +2,7 @@ const prisma = require('../utils/prisma');
 const { Prisma } = require('@prisma/client');
 const ApiError = require('../utils/ApiError');
 const { RouteStatus, BookingStatus } = require('@prisma/client');
-const { checkAndApplyDriverSuspension } = require('./penalty.service');
+const { recordDriverPenaltyEvent, checkAndApplyDriverSuspension } = require('./penalty.service');
 
 const baseInclude = {
   driver: {
@@ -326,10 +326,9 @@ const cancelRoute = async (routeId, driverId, opts = {}) => {
 
   const now = new Date();
   const affected = route.bookings || [];
-  const hasConfirmed = affected.some(b => b.status === BookingStatus.CONFIRMED);
+  const confirmedBookings = affected.filter(b => b.status === BookingStatus.CONFIRMED);
 
   await prisma.$transaction(async (tx) => {
-    //ยกเลิก Route
     await tx.route.update({
       where: { id: routeId },
       data: {
@@ -340,14 +339,13 @@ const cancelRoute = async (routeId, driverId, opts = {}) => {
     });
 
     if (affected.length) {
-      //ยกเลิก Booking ที่ค้างทั้งหมด
       await tx.booking.updateMany({
         where: { routeId, status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] } },
         data: {
           status: BookingStatus.CANCELLED,
           cancelledBy: 'DRIVER',
           cancelledAt: now,
-          cancelReason: reason
+          cancelReason: reason || null
         }
       });
 
@@ -358,17 +356,76 @@ const cancelRoute = async (routeId, driverId, opts = {}) => {
         body: 'ขออภัย เส้นทางที่คุณจองถูกยกเลิกโดยคนขับ',
         metadata: { routeId, bookingId: b.id, by: 'DRIVER', reason }
       }));
-      // ทำ bulk insert ทีละก้อน
       for (const n of notiData) {
         await tx.notification.create({ data: n });
       }
     }
   });
 
-  //บทลงโทษฝั่งไดรเวอร์
-  await checkAndApplyDriverSuspension(driverId, { confirmedOnly: hasConfirmed });
+  // เก็บประวัติ (ต่อบุกกิ้งที่ยืนยันแล้ว) เพื่อ analytics/รายงานเดิม
+  for (const b of confirmedBookings) {
+    await recordDriverPenaltyEvent(driverId, {
+      type: 'DRIVER_CONFIRMED_CANCEL',
+      routeId,
+      bookingId: b.id,
+    });
+  }
+
+  // แบนทันทีถ้าเส้นทางนี้มี CONFIRMED >= 3
+  if (confirmedBookings.length >= 3) {
+    const suspendedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await prisma.user.update({
+      where: { id: driverId },
+      data: { driverSuspendedUntil: suspendedUntil },
+    });
+
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: driverId,
+          type: 'SYSTEM',
+          title: 'ระงับสิทธิ์ผู้ขับขี่ชั่วคราว',
+          body: 'บัญชีผู้ขับขี่ของคุณถูกระงับ 7 วัน เนื่องจากยกเลิกเส้นทางที่มีผู้โดยสารยืนยันแล้วตั้งแต่ 3 รายขึ้นไป',
+          metadata: {
+            kind: 'DRIVER_SUSPENSION',
+            reason: 'CANCEL_ROUTE_WITH_3_CONFIRMED',
+            routeId,
+            confirmedCount: confirmedBookings.length,
+          },
+        },
+      });
+    } catch (_) {}
+  } else {
+    // ยังไม่ถึงเกณฑ์แบนทันที → คงตรรกะสะสม 30 วันไว้ตามระบบเดิม
+    await checkAndApplyDriverSuspension(driverId);
+  }
 
   return { id: routeId, status: RouteStatus.CANCELLED, cancelledBy: 'DRIVER', cancelledAt: now };
+};
+
+const completeRoute = async (routeId, driverId) => {
+  const route = await prisma.route.findUnique({
+    where: { id: routeId },
+    include: {
+      driver: { select: { id: true } },
+      bookings: { select: { status: true } }
+    }
+  });
+  if (!route) throw new ApiError(404, 'Route not found');
+  if (route.driverId !== driverId) throw new ApiError(403, 'Forbidden');
+
+  // อนุญาตให้จบเฉพาะสถานะที่ยัง active
+  const allowed = new Set([RouteStatus.AVAILABLE, RouteStatus.FULL, RouteStatus.IN_TRANSIT]);
+  if (!allowed.has(route.status)) {
+    throw new ApiError(400, 'Route cannot be completed at this stage');
+  }
+
+  // ตามสโคปตอนนี้ ยังไม่ไปแตะ bookings/penalty
+  const updated = await prisma.route.update({
+    where: { id: routeId },
+    data: { status: RouteStatus.COMPLETED }
+  });
+  return updated;
 };
 
 module.exports = {
@@ -379,5 +436,6 @@ module.exports = {
   createRoute,
   updateRoute,
   deleteRoute,
-  cancelRoute
+  cancelRoute,
+  completeRoute
 };

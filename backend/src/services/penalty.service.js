@@ -1,7 +1,7 @@
 const prisma = require("../utils/prisma");
 
-const PASSENGER_CANCEL_LIMIT = 3; // ≥ 3 ครั้งใน 30 วัน
-const DRIVER_CANCEL_LIMIT = 2;
+const DRIVER_CANCEL_LIMIT = 3;
+const PASSENGER_CANCEL_LIMIT = 3;
 const WINDOW_DAYS = 30;
 const SUSPEND_DAYS = 7;
 
@@ -9,107 +9,122 @@ function addDays(date, days) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-async function checkAndApplyPassengerSuspension(passengerId, opts = {}) {
-  const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
-
-  let cancelCount;
-
-  if (opts.confirmedOnly) {
-    //นับเฉพาะ "การยกเลิกหลังจากเคย CONFIRMED"
-    // อ้างอิงจาก Notification ที่บันทึกไว้ตอน cancel
-    cancelCount = await prisma.notification.count({
-      where: {
-        userId: passengerId,
-        type: "SYSTEM",
-        createdAt: { gte: since },
-        // Prisma JSON filter (PostgreSQL): ต้องใช้ Prisma 5 ขึ้นไป
-        metadata: {
-          // path -> ค่าในคีย์ JSON
-          path: ["kind"],
-          equals: "PASSENGER_CONFIRMED_CANCEL",
-        },
-      },
+/** ---------- Record Events (idempotent) ---------- */
+async function recordDriverPenaltyEvent(driverId, { type, routeId, bookingId } = {}) {
+  if (!driverId || !type) return;
+  try {
+    await prisma.penaltyEvent.create({
+      data: { userId: driverId, type, routeId: routeId || null, bookingId: bookingId || null },
     });
-  } else {
-    // พฤติกรรมเดิม (ไม่ใช้ใน flow ใหม่ แต่เก็บไว้เผื่อที่อื่นเรียก)
-    cancelCount = await prisma.booking.count({
-      where: {
-        passengerId,
-        status: "CANCELLED",
-        cancelledBy: "PASSENGER",
-        cancelledAt: { gte: since },
-      },
-    });
-  }
-
-  if (cancelCount >= PASSENGER_CANCEL_LIMIT) {
-    const until = addDays(new Date(), SUSPEND_DAYS);
-    await prisma.user.update({
-      where: { id: passengerId },
-      data: { passengerSuspendedUntil: until },
-    });
-
-    try {
-      await prisma.notification.create({
-        data: {
-          userId: passengerId,
-          type: "SYSTEM",
-          title: "ระงับสิทธิ์การจองชั่วคราว",
-          body: `คุณถูกระงับสิทธิ์การจอง ${SUSPEND_DAYS} วัน เนื่องจากยกเลิกการจองที่อนุมัติแล้ว ${PASSENGER_CANCEL_LIMIT} ครั้ง ภายใน ${WINDOW_DAYS} วัน`,
-          metadata: {
-            kind: "PASSENGER_SUSPENSION",
-            windowDays: WINDOW_DAYS,
-            suspendDays: SUSPEND_DAYS,
-          },
-        },
-      });
-    } catch (_) { }
+  } catch (err) {
+    // P2002 = unique constraint (ถือว่าบันทึกไว้แล้ว)
+    if (err?.code !== 'P2002') throw err;
   }
 }
 
-async function checkAndApplyDriverSuspension(driverId, opts = {}) {
-  const { confirmedOnly = false } = opts;
-  const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
+async function recordPassengerPenaltyEvent(passengerId, { type, routeId, bookingId } = {}) {
+  if (!passengerId || !type) return;
+  try {
+    await prisma.penaltyEvent.create({
+      data: { userId: passengerId, type, routeId: routeId || null, bookingId: bookingId || null },
+    });
+  } catch (err) {
+    if (err?.code !== 'P2002') throw err;
+  }
+}
 
-  // นับจำนวนเส้นทางที่ถูกยกเลิกโดยไดรเวอร์ในช่วงเวลา
-  const cancelCount = await prisma.route.count({
-    where: {
-      driverId,
-      status: "CANCELLED",
-      cancelledBy: "DRIVER",
-      cancelledAt: { gte: since },
-    },
+/** ---------- Check & Apply Suspensions ---------- */
+async function checkAndApplyDriverSuspension(driverId) {
+  const user = await prisma.user.findUnique({
+    where: { id: driverId },
+    select: { driverPenaltyResetAt: true }
   });
 
-  // ใช้เกณฑ์พื้นฐานเดียวกับค่าคงที่เดิม (คุณตั้งไว้ที่ไฟล์นี้)
-  // ถ้าต้องการเข้มงวดขึ้นเมื่อเป็น confirmedOnly ให้ปรับเกณฑ์ที่ service ผู้เรียกก็ได้
-  if (cancelCount >= DRIVER_CANCEL_LIMIT) {
+  const sinceByWindow = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const since = user?.driverPenaltyResetAt && user.driverPenaltyResetAt > sinceByWindow
+    ? user.driverPenaltyResetAt
+    : sinceByWindow;
+
+  const count = await prisma.penaltyEvent.count({
+    where: { userId: driverId, type: 'DRIVER_CONFIRMED_CANCEL', createdAt: { gte: since } },
+  });
+
+  if (count >= DRIVER_CANCEL_LIMIT) {
     const until = addDays(new Date(), SUSPEND_DAYS);
     await prisma.user.update({
       where: { id: driverId },
       data: { driverSuspendedUntil: until },
     });
-
+    // แจ้งเตือน (optional)
     try {
       await prisma.notification.create({
         data: {
           userId: driverId,
           type: "SYSTEM",
           title: "ระงับสิทธิ์ผู้ขับขี่ชั่วคราว",
-          body: `บัญชีผู้ขับขี่ของคุณถูกระงับ ${SUSPEND_DAYS} วัน เนื่องจากยกเลิกเส้นทาง ${DRIVER_CANCEL_LIMIT} ครั้ง ภายใน ${WINDOW_DAYS} วัน`,
-          metadata: {
-            kind: "DRIVER_SUSPENSION",
-            windowDays: WINDOW_DAYS,
-            suspendDays: SUSPEND_DAYS,
-            confirmedOnly,
-          },
+          body: `บัญชีผู้ขับขี่ของคุณถูกระงับ ${SUSPEND_DAYS} วัน เนื่องจากยกเลิกเส้นทางหลังมีการยืนยันแล้ว ${DRIVER_CANCEL_LIMIT} ครั้ง ภายใน ${WINDOW_DAYS} วัน`,
+          metadata: { kind: "DRIVER_SUSPENSION", windowDays: WINDOW_DAYS, suspendDays: SUSPEND_DAYS, countedFrom: since },
         },
       });
-    } catch (_) { }
+    } catch (_) {}
   }
 }
 
+async function checkAndApplyPassengerSuspension(passengerId) {
+  const user = await prisma.user.findUnique({
+    where: { id: passengerId },
+    select: { passengerPenaltyResetAt: true }
+  });
+
+  const sinceByWindow = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const since = user?.passengerPenaltyResetAt && user.passengerPenaltyResetAt > sinceByWindow
+    ? user.passengerPenaltyResetAt
+    : sinceByWindow;
+
+  const count = await prisma.penaltyEvent.count({
+    where: { userId: passengerId, type: 'PASSENGER_CONFIRMED_CANCEL', createdAt: { gte: since } },
+  });
+
+  if (count >= PASSENGER_CANCEL_LIMIT) {
+    const until = addDays(new Date(), SUSPEND_DAYS);
+    await prisma.user.update({
+      where: { id: passengerId },
+      data: { passengerSuspendedUntil: until },
+    });
+    // แจ้งเตือน (optional)
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: passengerId,
+          type: "SYSTEM",
+          title: "ระงับสิทธิ์การจองชั่วคราว",
+          body: `คุณถูกระงับสิทธิ์การจอง ${SUSPEND_DAYS} วัน เนื่องจากยกเลิกการจองที่ได้รับการยืนยันแล้ว ${PASSENGER_CANCEL_LIMIT} ครั้ง ภายใน ${WINDOW_DAYS} วัน`,
+          metadata: { kind: "PASSENGER_SUSPENSION", windowDays: WINDOW_DAYS, suspendDays: SUSPEND_DAYS, countedFrom: since },
+        },
+      });
+    } catch (_) {}
+  }
+}
+
+/** ---------- Admin helpers (optional) ---------- */
+async function resetDriverPenalties(driverId) {
+  await prisma.user.update({
+    where: { id: driverId },
+    data: { driverSuspendedUntil: null, driverPenaltyResetAt: new Date() },
+  });
+}
+async function resetPassengerPenalties(passengerId) {
+  await prisma.user.update({
+    where: { id: passengerId },
+    data: { passengerSuspendedUntil: null, passengerPenaltyResetAt: new Date() },
+  });
+}
+
 module.exports = {
+  recordDriverPenaltyEvent,
+  recordPassengerPenaltyEvent,
+  checkAndApplyDriverSuspension,
   checkAndApplyPassengerSuspension,
-  checkAndApplyDriverSuspension
+  resetDriverPenalties,
+  resetPassengerPenalties,
 };

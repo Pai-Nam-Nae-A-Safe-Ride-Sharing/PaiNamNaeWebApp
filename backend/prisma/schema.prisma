@@ -60,6 +60,11 @@ enum NotificationType {
   ROUTE
 }
 
+enum PenaltyEventType {
+  DRIVER_CONFIRMED_CANCEL   
+  PASSENGER_CONFIRMED_CANCEL
+}
+
 model User {
   id                    String   @id @default(cuid())
   username              String   @unique
@@ -81,14 +86,18 @@ model User {
   lastLogin             DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
   passengerSuspendedUntil DateTime?
   driverSuspendedUntil    DateTime?
+  driverPenaltyResetAt    DateTime?
+  passengerPenaltyResetAt  DateTime?
+  
   driverVerification    DriverVerification?
   vehicles              Vehicle[]
   notification          Notification[]
   createdRoutes         Route[]             @relation("DriverRoutes")
   bookings              Booking[]           @relation("PassengerBookings")
-
+  penaltyEvents           PenaltyEvent[]      @relation("UserPenaltyEvents")
   @@index([role])
   @@index([isActive])
   @@index([isVerified])
@@ -188,7 +197,7 @@ model Route {
   updatedAt     DateTime @updatedAt
 
   bookings        Booking[]
-
+  penaltyEvents   PenaltyEvent[] @relation("RoutePenaltyEvents")
   @@index([driverId])
   @@index([vehicleId])
   @@index([status])
@@ -200,6 +209,7 @@ model Booking {
   id              String        @id @default(cuid())
   routeId         String
   route           Route         @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  penaltyEvents   PenaltyEvent[] @relation("BookingPenaltyEvents")
   passengerId     String
   passenger       User          @relation("PassengerBookings", fields: [passengerId], references: [id], onDelete: Cascade)
   numberOfSeats   Int
@@ -210,4 +220,19 @@ model Booking {
   pickupLocation  Json          @db.Json
   dropoffLocation Json          @db.Json
   createdAt       DateTime      @default(now())
+}
+
+model PenaltyEvent {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation("UserPenaltyEvents", fields: [userId], references: [id], onDelete: Cascade)
+  type      PenaltyEventType
+  routeId   String?
+  route      Route?            @relation("RoutePenaltyEvents", fields: [routeId], references: [id], onDelete: SetNull)
+  bookingId String?
+  booking    Booking?          @relation("BookingPenaltyEvents", fields: [bookingId], references: [id], onDelete: SetNull)
+  createdAt DateTime          @default(now())
+  @@index([userId, type, createdAt])
+  @@unique([userId, type, routeId])    // กันเหตุซ้ำฝั่งไดรเวอร์
+  @@unique([userId, type, bookingId])  // กันเหตุซ้ำฝั่งผู้โดยสาร
 }
