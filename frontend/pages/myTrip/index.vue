@@ -251,9 +251,6 @@ const activeTab = ref('pending')
 const selectedTripId = ref(null)
 const isLoading = ref(false)
 const mapContainer = ref(null)
-let map = null
-let currentPolyline = null
-let currentMarkers = []
 const allTrips = ref([])
 
 let gmap = null // Google Map instance
@@ -305,10 +302,6 @@ const filteredTrips = computed(() => {
         )
     }
     return allTrips.value.filter(t => t.status === activeTab.value)
-})
-
-const selectedTrip = computed(() => {
-    return allTrips.value.find((trip) => trip.id === selectedTripId.value) || null
 })
 
 function cleanAddr(a) {
@@ -413,7 +406,6 @@ async function fetchMyTrips() {
 
         allTrips.value = formatted
 
-        // รอให้แผนที่พร้อมก่อน แล้วค่อย reverse geocode เพื่อได้ "ชื่อสถานที่" สวยๆ
         await waitMapReady()
 
         const jobs = allTrips.value.map(async (t, idx) => {
